@@ -37,9 +37,9 @@ AUTH_HEADER = {'Authorization': f'Bearer {TOKEN}'}
 def load_font(size):
     from PIL import ImageFont
     candidates = [
-        'C:/Windows/Fonts/msjhbd.ttc',   # Microsoft JhengHei Bold（繁體）
+        'C:/Windows/Fonts/msjhbd.ttc',
         'C:/Windows/Fonts/msjh.ttc',
-        'C:/Windows/Fonts/msyhbd.ttc',   # Microsoft YaHei Bold（簡體）
+        'C:/Windows/Fonts/msyhbd.ttc',
         'C:/Windows/Fonts/msyh.ttc',
         '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
         '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
@@ -50,6 +50,20 @@ def load_font(size):
         except Exception:
             continue
     return ImageFont.load_default()
+
+
+def load_emoji_font(size):
+    from PIL import ImageFont
+    candidates = [
+        'C:/Windows/Fonts/seguiemj.ttf',   # Segoe UI Emoji（Windows 彩色 emoji）
+        'C:/Windows/Fonts/seguisym.ttf',
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return load_font(size)
 
 
 # ──────────────────────────────────────────
@@ -68,63 +82,107 @@ BUTTON_COLORS = {
 }
 
 
+def hex_to_rgb(h):
+    h = h.lstrip('#')
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+
+def darken(hex_color, factor=0.6):
+    r, g, b = hex_to_rgb(hex_color)
+    return (int(r * factor), int(g * factor), int(b * factor))
+
+
 def draw_cell(draw, x, y, w, h, bg_hex, symbol, label, font_sym, font_lbl):
-    """繪製單一按鈕格"""
-    # 背景
+    """老闆選單用：簡單色塊按鈕"""
     draw.rectangle([x, y, x + w - 1, y + h - 1], fill=bg_hex)
-    # 上方亮邊
     draw.rectangle([x, y, x + w - 1, y + 4], fill='#ffffff40')
-    # 下方暗邊
     draw.rectangle([x, y + h - 5, x + w - 1, y + h - 1], fill='#00000040')
-    # 符號（上半部）
     cx = x + w // 2
-    sym_y = y + int(h * 0.32)
-    lbl_y = y + int(h * 0.68)
     try:
-        draw.text((cx, sym_y), symbol, fill='white', anchor='mm', font=font_sym)
-        draw.text((cx, lbl_y), label,  fill='white', anchor='mm', font=font_lbl)
+        draw.text((cx, y + int(h * 0.32)), symbol, fill='white', anchor='mm', font=font_sym)
+        draw.text((cx, y + int(h * 0.68)), label,  fill='white', anchor='mm', font=font_lbl)
     except TypeError:
-        # 舊版 Pillow 不支援 anchor
-        sw = font_sym.getlength(symbol) if hasattr(font_sym, 'getlength') else len(symbol) * size_sym // 2
-        lw = font_lbl.getlength(label)  if hasattr(font_lbl, 'getlength') else len(label)  * size_lbl // 2
-        draw.text((cx - sw // 2, sym_y - 30), symbol, fill='white', font=font_sym)
-        draw.text((cx - lw // 2, lbl_y - 20), label,  fill='white', font=font_lbl)
+        draw.text((cx - 60, y + int(h * 0.32) - 30), symbol, fill='white', font=font_sym)
+        draw.text((cx - 80, y + int(h * 0.68) - 20), label,  fill='white', font=font_lbl)
+
+
+def draw_veg_cell(img, draw, x, y, w, h, bg_hex, emoji_sym, label, font_emoji, font_lbl):
+    """繪製蔬菜風格按鈕格"""
+    bg = hex_to_rgb(bg_hex)
+    dark = darken(bg_hex, 0.55)
+
+    # 漸層背景（手動模擬：由深到亮）
+    for row in range(h):
+        ratio = row / h
+        r = int(dark[0] + (bg[0] - dark[0]) * ratio)
+        g = int(dark[1] + (bg[1] - dark[1]) * ratio)
+        b = int(dark[2] + (bg[2] - dark[2]) * ratio)
+        draw.line([(x, y + row), (x + w - 1, y + row)], fill=(r, g, b))
+
+    # 裝飾圓形背景（讓 emoji 更突出）
+    cx = x + w // 2
+    circle_r = int(min(w, h) * 0.28)
+    circle_y = y + int(h * 0.33)
+    draw.ellipse(
+        [cx - circle_r, circle_y - circle_r, cx + circle_r, circle_y + circle_r],
+        fill=(255, 255, 255, 40) if hasattr(draw, '_image') else (255, 255, 255),
+    )
+
+    # Emoji 符號
+    try:
+        draw.text((cx, circle_y), emoji_sym, anchor='mm', font=font_emoji, embedded_color=True)
+    except Exception:
+        try:
+            draw.text((cx, circle_y), emoji_sym, anchor='mm', font=font_emoji)
+        except Exception:
+            draw.text((cx - 80, circle_y - 80), emoji_sym, font=font_emoji)
+
+    # 標籤文字
+    lbl_y = y + int(h * 0.72)
+    try:
+        draw.text((cx, lbl_y), label, fill='white', anchor='mm', font=font_lbl)
+    except Exception:
+        lw = font_lbl.getlength(label) if hasattr(font_lbl, 'getlength') else len(label) * 50
+        draw.text((cx - int(lw // 2), lbl_y - 35), label, fill='white', font=font_lbl)
+
+    # 下方色條裝飾
+    draw.rectangle([x, y + h - 12, x + w - 1, y + h - 1], fill=hex_to_rgb(bg_hex))
 
 
 def draw_grid_lines(draw, W, H, rows, cols):
-    """繪製格線"""
     cw = W // cols
     ch = H // rows
     for c in range(1, cols):
-        draw.line([c * cw, 0, c * cw, H], fill='#ffffff60', width=4)
+        draw.line([c * cw, 0, c * cw, H], fill=(255, 255, 255, 50), width=3)
     for r in range(1, rows):
-        draw.line([0, r * ch, W, r * ch], fill='#ffffff60', width=4)
+        draw.line([0, r * ch, W, r * ch], fill=(255, 255, 255, 50), width=3)
 
 
 def create_employee_image():
-    """員工選單：6格 2×3"""
+    """員工選單：6格 2×3，蔬菜主題"""
     W, H = 2500, 1686
     CW, CH = W // 2, H // 3
 
-    img = Image.new('RGB', (W, H), '#1a1a2e')
+    img = Image.new('RGB', (W, H), '#111820')
     draw = ImageDraw.Draw(img)
 
-    font_sym = load_font(160)
-    font_lbl = load_font(90)
+    font_emoji = load_emoji_font(200)
+    font_lbl = load_font(95)
 
+    # 蔬菜主題：青花椰菜/南瓜/玉米筍/娃娃菜/櫻桃/香草
     cells = [
-        (BUTTON_COLORS['green'],  '▲', '上班打卡'),
-        (BUTTON_COLORS['red'],    '▼', '下班打卡'),
-        (BUTTON_COLORS['orange'], '$', '查本月薪資'),
-        (BUTTON_COLORS['blue'],   '=', '查打卡記錄'),
-        (BUTTON_COLORS['teal'],   '*', '登記'),
-        (BUTTON_COLORS['gray'],   '?', '說明'),
+        ('#1a5c2a', '🥦', '上班打卡'),
+        ('#7a3200', '🎃', '下班打卡'),
+        ('#7a6200', '🌽', '查本月薪資'),
+        ('#1a4a38', '🥬', '查打卡記錄'),
+        ('#1a4d2e', '🥒', '登記'),
+        ('#1c3d1a', '🫛', '說明'),
     ]
 
-    for i, (color, sym, lbl) in enumerate(cells):
+    for i, (color, emoji, lbl) in enumerate(cells):
         col = i % 2
         row = i // 2
-        draw_cell(draw, col * CW, row * CH, CW, CH, color, sym, lbl, font_sym, font_lbl)
+        draw_veg_cell(img, draw, col * CW, row * CH, CW, CH, color, emoji, lbl, font_emoji, font_lbl)
 
     draw_grid_lines(draw, W, H, 3, 2)
     return img
