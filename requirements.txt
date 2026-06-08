@@ -3,3 +3,5 @@ line-bot-sdk==3.11.0
 psycopg2-binary==2.9.9
 pytz==2024.1
 gunicorn==22.0.0
+Pillow==10.4.0
+requests==2.32.3

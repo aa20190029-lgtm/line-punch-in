@@ -3,15 +3,15 @@ from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
-    Configuration, ApiClient, MessagingApi,
+    ApiClient, MessagingApi,
     ReplyMessageRequest, TextMessage,
     QuickReply, QuickReplyItem, MessageAction, LocationAction
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent
 from handlers import handle_message, handle_location
+from line_config import configuration
 
 app = Flask(__name__)
-configuration = Configuration(access_token=os.environ['LINE_CHANNEL_ACCESS_TOKEN'])
 handler = WebhookHandler(os.environ['LINE_CHANNEL_SECRET'])
 
 

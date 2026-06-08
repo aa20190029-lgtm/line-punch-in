@@ -1,6 +1,8 @@
 import calendar
 from datetime import date
 
+HOURS_PER_SHIFT = 4  # 每班固定 4 小時（10:30-14:30 或 16:30-20:30）
+
 
 def roc_to_iso(roc_str):
     """民國年字串 YYYMMDD → 西元 YYYY-MM-DD，失敗回 None"""
@@ -18,6 +20,7 @@ def roc_to_iso(roc_str):
 
 
 def calc_overtime_pay(hourly_wage, overtime_minutes):
+    """勞基法加班費：前2小時1.34倍，之後1.67倍，按分鐘精算"""
     if overtime_minutes <= 0:
         return 0
     hours = overtime_minutes / 60
@@ -42,25 +45,26 @@ def calc_monthly_summary(employee, records, year_month=None):
 
 
 def _calc_hourly_salary(employee, records):
-    sh, sm = map(int, employee['shift_start'].split(':'))
-    eh, em = map(int, employee['shift_end'].split(':'))
-    normal_hours = (eh * 60 + em - sh * 60 - sm) / 60
-    hourly_wage = employee['hourly_wage'] or 200
+    hourly_wage = employee.get('hourly_wage') or 200
 
-    work_days = total_late = total_ot = 0
+    work_shifts = total_late = total_ot = 0
+    unique_dates = set()
     for r in records:
         if r['punch_in']:
-            work_days += 1
-            total_late += r['late_minutes'] or 0
-            total_ot += r['overtime_minutes'] or 0
+            work_shifts += 1
+            total_late += r.get('late_minutes') or 0
+            total_ot += r.get('overtime_minutes') or 0
+            unique_dates.add(r['date'])
 
-    base_pay = round(hourly_wage * normal_hours * work_days)
+    work_days = len(unique_dates)
+    base_pay = round(hourly_wage * HOURS_PER_SHIFT * work_shifts)
     ot_pay = calc_overtime_pay(hourly_wage, total_ot)
     late_deduct = calc_late_deduction(hourly_wage, total_late)
 
     return {
         'salary_type': 'hourly',
         'work_days': work_days,
+        'work_shifts': work_shifts,
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
         'base_pay': base_pay,
@@ -77,13 +81,16 @@ def _calc_monthly_salary(employee, records, year_month):
     monthly_salary = employee.get('monthly_salary') or 0
     hourly_rate = monthly_salary / 240  # 30天 × 8小時
 
-    work_days = total_late = total_ot = 0
+    work_shifts = total_late = total_ot = 0
+    unique_dates = set()
     for r in records:
         if r['punch_in']:
-            work_days += 1
-            total_late += r['late_minutes'] or 0
-            total_ot += r['overtime_minutes'] or 0
+            work_shifts += 1
+            total_late += r.get('late_minutes') or 0
+            total_ot += r.get('overtime_minutes') or 0
+            unique_dates.add(r['date'])
 
+    work_days = len(unique_dates)
     pay_days = total_days = None
     if year_month:
         year, month = map(int, year_month.split('-'))
@@ -113,6 +120,7 @@ def _calc_monthly_salary(employee, records, year_month):
     return {
         'salary_type': 'monthly',
         'work_days': work_days,
+        'work_shifts': work_shifts,
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
         'base_pay': base_pay,
