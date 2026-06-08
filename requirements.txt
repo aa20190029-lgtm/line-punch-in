@@ -1,0 +1,5 @@
+flask==3.0.3
+line-bot-sdk==3.11.0
+psycopg2-binary==2.9.9
+pytz==2024.1
+gunicorn==22.0.0
