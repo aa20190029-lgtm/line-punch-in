@@ -37,10 +37,17 @@ def calc_late_deduction(hourly_wage, late_minutes):
     return round(hourly_wage * (late_minutes / 60))
 
 
-def calc_monthly_summary(employee, records, year_month=None):
+def calc_leave_deduction(monthly_salary, leave_days):
+    """請假扣款：月薪 ÷ 30 × 請假天數（勞基法100%扣）"""
+    if leave_days <= 0:
+        return 0
+    return round(monthly_salary / 30 * leave_days)
+
+
+def calc_monthly_summary(employee, records, year_month=None, leave_days=0):
     salary_type = employee.get('salary_type') or 'hourly'
     if salary_type == 'monthly':
-        return _calc_monthly_salary(employee, records, year_month)
+        return _calc_monthly_salary(employee, records, year_month, leave_days)
     return _calc_hourly_salary(employee, records)
 
 
@@ -77,7 +84,7 @@ def _calc_hourly_salary(employee, records):
     }
 
 
-def _calc_monthly_salary(employee, records, year_month):
+def _calc_monthly_salary(employee, records, year_month, leave_days=0):
     monthly_salary = employee.get('monthly_salary') or 0
     hourly_rate = monthly_salary / 240  # 30天 × 8小時
 
@@ -116,6 +123,7 @@ def _calc_monthly_salary(employee, records, year_month):
 
     ot_pay = calc_overtime_pay(hourly_rate, total_ot)
     late_deduct = round(hourly_rate * total_late / 60)
+    leave_deduct = calc_leave_deduction(monthly_salary, leave_days)
 
     return {
         'salary_type': 'monthly',
@@ -123,10 +131,12 @@ def _calc_monthly_salary(employee, records, year_month):
         'work_shifts': work_shifts,
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
+        'leave_days': leave_days,
         'base_pay': base_pay,
         'overtime_pay': ot_pay,
         'late_deduction': late_deduct,
-        'net_pay': base_pay + ot_pay - late_deduct,
+        'leave_deduction': leave_deduct,
+        'net_pay': base_pay + ot_pay - late_deduct - leave_deduct,
         'hourly_rate': round(hourly_rate),
         'pay_days': pay_days,
         'total_days': total_days,

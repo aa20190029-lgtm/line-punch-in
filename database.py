@@ -75,6 +75,18 @@ def init_db():
         # 允許 line_user_id 為 NULL（老闆建立尚未綁定的員工）
         cur.execute("ALTER TABLE employees ALTER COLUMN line_user_id DROP NOT NULL")
 
+        # 請假記錄表
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS leave_records (
+                id SERIAL PRIMARY KEY,
+                employee_id INTEGER NOT NULL REFERENCES employees(id),
+                date TEXT NOT NULL,
+                leave_type TEXT DEFAULT 'sick',
+                created_at TEXT DEFAULT '',
+                UNIQUE (employee_id, date)
+            )
+        """)
+
         # 出勤表：新增班次欄位
         cur.execute("ALTER TABLE attendance ADD COLUMN IF NOT EXISTS shift_number INTEGER DEFAULT 1")
         cur.execute("ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE")
@@ -374,6 +386,41 @@ def clear_temp_state(line_user_id):
         cur = conn.cursor()
         cur.execute("DELETE FROM temp_state WHERE line_user_id = %s", (line_user_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def add_leave_record(employee_id, date_str, leave_type='sick'):
+    import pytz
+    from datetime import datetime
+    created_at = datetime.now(pytz.timezone('Asia/Taipei')).strftime('%Y-%m-%d %H:%M:%S')
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO leave_records (employee_id, date, leave_type, created_at)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (employee_id, date) DO NOTHING""",
+            (employee_id, date_str, leave_type, created_at)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_monthly_leave_records(employee_id, year_month):
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM leave_records WHERE employee_id = %s AND date LIKE %s ORDER BY date",
+            (employee_id, f"{year_month}%")
+        )
+        return cur.fetchall()
     finally:
         conn.close()
 

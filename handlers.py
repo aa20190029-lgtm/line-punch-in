@@ -10,6 +10,7 @@ from database import (
     get_monthly_attendance, get_config, set_config,
     get_temp_state, set_temp_state, clear_temp_state, deactivate_employee,
     update_employee_salary, update_employee_hire_date,
+    add_leave_record, get_monthly_leave_records,
 )
 from salary import calc_overtime_pay, calc_late_deduction, calc_monthly_summary, roc_to_iso
 from line_config import link_user_to_boss_menu, link_user_to_employee_menu
@@ -172,7 +173,7 @@ def handle_message(line_user_id, text):
         return None
 
     if text == '員工管理':
-        return qr('👥 員工管理\n請選擇操作：', ['查詢員工', '新增員工', '設定薪資', '刪除員工'])
+        return qr('👥 員工管理\n請選擇操作：', ['查詢員工', '新增員工', '設定薪資', '請假登記', '刪除員工'])
 
     if text in ['查詢員工', '員工列表']:
         return handle_employee_list()
@@ -183,6 +184,9 @@ def handle_message(line_user_id, text):
 
     if text in ['設定薪資', '薪資設定']:
         return handle_show_salary_select(line_user_id)
+
+    if text == '請假登記':
+        return handle_leave_register_start(line_user_id)
 
     if text == '刪除員工':
         return handle_show_delete_select(line_user_id)
@@ -344,6 +348,32 @@ def handle_state(line_user_id, text, state, data):
         name = text.strip()
         clear_temp_state(line_user_id)
         return handle_set_salary_start(line_user_id, name)
+
+    # ── 老闆：請假登記選員工 ──
+    if state == 'boss_leave_select':
+        name = text.strip()
+        emp = get_employee_by_name(name)
+        if not emp:
+            clear_temp_state(line_user_id)
+            return f'❌ 找不到員工「{name}」'
+        set_temp_state(line_user_id, 'boss_leave_date', str(emp['id']))
+        return '請輸入請假日期（民國年，如：1140608）：'
+
+    # ── 老闆：請假登記輸入日期 ──
+    if state == 'boss_leave_date':
+        emp_id = int(data)
+        if text in ['取消', '算了']:
+            clear_temp_state(line_user_id)
+            return '已取消請假登記。'
+        date_iso = roc_to_iso(text.strip())
+        if not date_iso:
+            clear_temp_state(line_user_id)
+            return '❌ 日期格式有誤（如：1140608）。\n請重新點「請假登記」。'
+        ok = add_leave_record(emp_id, date_iso)
+        clear_temp_state(line_user_id)
+        if ok:
+            return f'✅ 請假登記完成\n日期：{date_iso}\n薪資報表將自動扣除當日薪資。'
+        return f'⚠️ 該日期已登記過請假，無需重複登記。'
 
     # ── 老闆：選員工刪除 ──
     if state == 'boss_delete_select':
@@ -663,12 +693,16 @@ def handle_my_month(line_user_id):
     if not records:
         return f'📊 {ym}\n本月尚無打卡紀錄。'
 
-    s = calc_monthly_summary(emp, records, ym)
+    leave_records = get_monthly_leave_records(emp['id'], ym)
+    leave_days = len(leave_records)
+    s = calc_monthly_summary(emp, records, ym, leave_days)
     salary_type = emp.get('salary_type') or 'hourly'
 
     msg = (f'📊 {ym} 出勤摘要\n'
            f'姓名：{emp["name"]}\n'
            f'出勤：{s["work_days"]} 天（{s["work_shifts"]} 班次）\n')
+    if leave_days > 0:
+        msg += f'請假：{leave_days} 天\n'
     if s['total_late_minutes'] > 0:
         msg += f'遲到：{s["total_late_minutes"]} 分鐘\n'
     if s['total_overtime_minutes'] > 0:
@@ -686,6 +720,8 @@ def handle_my_month(line_user_id):
         msg += f'加班費：+{s["overtime_pay"]:,} 元\n'
     if s['late_deduction'] > 0:
         msg += f'遲到扣：-{s["late_deduction"]:,} 元\n'
+    if s.get('leave_deduction', 0) > 0:
+        msg += f'請假扣：-{s["leave_deduction"]:,} 元\n'
     msg += f'應領：{s["net_pay"]:,} 元'
     return qr(msg, ['查打卡記錄'])
 
@@ -788,11 +824,15 @@ def handle_query_employee(name):
     records = get_monthly_attendance(emp['id'], ym)
     if not records:
         return f'📊 {name} {ym}\n本月尚無打卡紀錄。'
-    s = calc_monthly_summary(emp, records, ym)
+    leave_records = get_monthly_leave_records(emp['id'], ym)
+    leave_days = len(leave_records)
+    s = calc_monthly_summary(emp, records, ym, leave_days)
     salary_type = emp.get('salary_type') or 'hourly'
 
     msg = (f'📊 {name} {ym}\n'
            f'出勤：{s["work_days"]} 天（{s["work_shifts"]} 班次）\n')
+    if leave_days > 0:
+        msg += f'請假：{leave_days} 天\n'
     if s['total_late_minutes'] > 0:
         msg += f'遲到：{s["total_late_minutes"]} 分鐘\n'
     if s['total_overtime_minutes'] > 0:
@@ -810,6 +850,8 @@ def handle_query_employee(name):
         msg += f'加班費：+{s["overtime_pay"]:,} 元\n'
     if s['late_deduction'] > 0:
         msg += f'遲到扣：-{s["late_deduction"]:,} 元\n'
+    if s.get('leave_deduction', 0) > 0:
+        msg += f'請假扣：-{s["leave_deduction"]:,} 元\n'
     msg += f'應領：{s["net_pay"]:,} 元'
     msg += '\n\n── 每日明細 ──'
     for r in records:
@@ -833,14 +875,17 @@ def handle_monthly_report():
     total = 0
     for emp in employees:
         records = get_monthly_attendance(emp['id'], ym)
-        s = calc_monthly_summary(emp, records, ym)
+        leave_recs = get_monthly_leave_records(emp['id'], ym)
+        leave_days = len(leave_recs)
+        s = calc_monthly_summary(emp, records, ym, leave_days)
         total += s['net_pay']
         salary_type = emp.get('salary_type') or 'hourly'
         salary_hint = '月薪' if salary_type == 'monthly' else '時薪'
         late_info = f' 遲{s["total_late_minutes"]}分' if s['total_late_minutes'] > 0 else ''
         ot_info = f' 加{s["total_overtime_minutes"]}分' if s['total_overtime_minutes'] > 0 else ''
+        leave_info = f' 假{leave_days}天' if leave_days > 0 else ''
         shifts_info = f'{s["work_days"]}天{s["work_shifts"]}班'
-        msg += f'\n{emp["name"]}（{salary_hint}）：{shifts_info}{late_info}{ot_info}\n  應領 {s["net_pay"]:,} 元\n'
+        msg += f'\n{emp["name"]}（{salary_hint}）：{shifts_info}{late_info}{ot_info}{leave_info}\n  應領 {s["net_pay"]:,} 元\n'
     msg += f'{"─"*18}\n全員合計：{total:,} 元'
     return qr(msg, ['今日出勤', '員工管理'])
 
@@ -848,6 +893,15 @@ def handle_monthly_report():
 # ──────────────────────────────────────────
 #  GPS 管理
 # ──────────────────────────────────────────
+
+def handle_leave_register_start(line_user_id):
+    employees = get_all_employees()
+    if not employees:
+        return '目前沒有員工。'
+    names = [e['name'] for e in employees[:10]]
+    set_temp_state(line_user_id, 'boss_leave_select')
+    return qr('請選擇要登記請假的員工：', names)
+
 
 def handle_gps_setup_start(line_user_id):
     set_temp_state(line_user_id, 'set_store_gps')
