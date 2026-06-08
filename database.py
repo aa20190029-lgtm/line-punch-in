@@ -51,11 +51,25 @@ def init_db():
                 data TEXT DEFAULT ''
             )
         """)
-        cur.execute("INSERT INTO config (key, value) VALUES ('boss_line_id', '') ON CONFLICT DO NOTHING")
-        cur.execute("INSERT INTO config (key, value) VALUES ('default_shift_start', '08:00') ON CONFLICT DO NOTHING")
-        cur.execute("INSERT INTO config (key, value) VALUES ('default_shift_end', '17:00') ON CONFLICT DO NOTHING")
-        cur.execute("INSERT INTO config (key, value) VALUES ('default_hourly_wage', '200') ON CONFLICT DO NOTHING")
-        cur.execute("INSERT INTO config (key, value) VALUES ('late_grace_minutes', '5') ON CONFLICT DO NOTHING")
+        for key, value in [
+            ('boss_line_id', ''),
+            ('default_shift_start', '08:00'),
+            ('default_shift_end', '17:00'),
+            ('default_hourly_wage', '200'),
+            ('late_grace_minutes', '5'),
+            ('gps_enabled', '0'),
+            ('store_lat', ''),
+            ('store_lng', ''),
+            ('gps_radius_meters', '100'),
+        ]:
+            cur.execute(
+                "INSERT INTO config (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (key, value)
+            )
+        # 資料庫升級：新增欄位
+        cur.execute("ALTER TABLE employees ADD COLUMN IF NOT EXISTS salary_type TEXT DEFAULT 'hourly'")
+        cur.execute("ALTER TABLE employees ADD COLUMN IF NOT EXISTS monthly_salary INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE employees ADD COLUMN IF NOT EXISTS hire_date TEXT DEFAULT ''")
         conn.commit()
     finally:
         conn.close()
@@ -137,6 +151,40 @@ def add_employee(line_user_id, name, hourly_wage=None, shift_start=None, shift_e
             (line_user_id, name, hourly_wage, shift_start, shift_end, created_at, name)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def update_employee_salary(name, salary_type, hourly_wage=None, monthly_salary=None):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if salary_type == 'monthly':
+            cur.execute(
+                "UPDATE employees SET salary_type = %s, monthly_salary = %s WHERE name = %s AND is_active = TRUE",
+                ('monthly', monthly_salary or 0, name)
+            )
+        else:
+            cur.execute(
+                "UPDATE employees SET salary_type = %s, hourly_wage = %s WHERE name = %s AND is_active = TRUE",
+                ('hourly', hourly_wage or 200, name)
+            )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_employee_hire_date(name, hire_date_iso):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE employees SET hire_date = %s WHERE name = %s AND is_active = TRUE",
+            (hire_date_iso, name)
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 
