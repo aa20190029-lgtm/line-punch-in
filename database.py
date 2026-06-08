@@ -81,7 +81,20 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 employee_id INTEGER NOT NULL REFERENCES employees(id),
                 date TEXT NOT NULL,
-                leave_type TEXT DEFAULT 'sick',
+                leave_type TEXT DEFAULT 'personal',
+                created_at TEXT DEFAULT '',
+                UNIQUE (employee_id, date)
+            )
+        """)
+        cur.execute("ALTER TABLE leave_records ALTER COLUMN leave_type SET DEFAULT 'personal'")
+
+        # 國定假日加班費記錄表
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS holiday_bonuses (
+                id SERIAL PRIMARY KEY,
+                employee_id INTEGER NOT NULL REFERENCES employees(id),
+                date TEXT NOT NULL,
+                bonus_amount INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT DEFAULT '',
                 UNIQUE (employee_id, date)
             )
@@ -390,7 +403,7 @@ def clear_temp_state(line_user_id):
         conn.close()
 
 
-def add_leave_record(employee_id, date_str, leave_type='sick'):
+def add_leave_record(employee_id, date_str, leave_type='personal'):
     import pytz
     from datetime import datetime
     created_at = datetime.now(pytz.timezone('Asia/Taipei')).strftime('%Y-%m-%d %H:%M:%S')
@@ -418,6 +431,42 @@ def get_monthly_leave_records(employee_id, year_month):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             "SELECT * FROM leave_records WHERE employee_id = %s AND date LIKE %s ORDER BY date",
+            (employee_id, f"{year_month}%")
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def add_holiday_bonus(employee_id, date_str, bonus_amount):
+    """新增國定假日加班費記錄"""
+    import pytz
+    from datetime import datetime
+    created_at = datetime.now(pytz.timezone('Asia/Taipei')).strftime('%Y-%m-%d %H:%M:%S')
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO holiday_bonuses (employee_id, date, bonus_amount, created_at)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (employee_id, date) DO NOTHING""",
+            (employee_id, date_str, bonus_amount, created_at)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_monthly_holiday_bonuses(employee_id, year_month):
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM holiday_bonuses WHERE employee_id = %s AND date LIKE %s ORDER BY date",
             (employee_id, f"{year_month}%")
         )
         return cur.fetchall()

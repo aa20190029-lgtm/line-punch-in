@@ -3,6 +3,13 @@ from datetime import date
 
 HOURS_PER_SHIFT = 4  # 每班固定 4 小時（10:30-14:30 或 16:30-20:30）
 
+LEAVE_TYPE_LABELS = {
+    'personal': '事假',
+    'sick':     '病假',
+    'funeral':  '喪假',
+    'wedding':  '婚假',
+}
+
 
 def roc_to_iso(roc_str):
     """民國年字串 YYYMMDD → 西元 YYYY-MM-DD，失敗回 None"""
@@ -37,21 +44,38 @@ def calc_late_deduction(hourly_wage, late_minutes):
     return round(hourly_wage * (late_minutes / 60))
 
 
-def calc_leave_deduction(monthly_salary, leave_days):
-    """請假扣款：月薪 ÷ 30 × 請假天數（勞基法100%扣）"""
-    if leave_days <= 0:
-        return 0
-    return round(monthly_salary / 30 * leave_days)
+def calc_leave_deduction_by_records(monthly_salary, leave_records):
+    """依假別計算請假扣款（月薪制）
+    事假：月薪÷30（100%扣）
+    病假：月薪÷30÷2（50%扣）
+    喪假／婚假：不扣（工資照給）
+    """
+    total = 0
+    daily = monthly_salary / 30
+    for rec in leave_records:
+        lt = rec.get('leave_type', 'personal')
+        if lt == 'sick':
+            total += daily / 2
+        elif lt == 'personal':
+            total += daily
+        # funeral / wedding → 0，不扣
+    return round(total)
 
 
-def calc_monthly_summary(employee, records, year_month=None, leave_days=0):
+def calc_monthly_summary(employee, records, year_month=None, leave_records=None, holiday_bonuses=None):
+    if leave_records is None:
+        leave_records = []
+    if holiday_bonuses is None:
+        holiday_bonuses = []
     salary_type = employee.get('salary_type') or 'hourly'
     if salary_type == 'monthly':
-        return _calc_monthly_salary(employee, records, year_month, leave_days)
-    return _calc_hourly_salary(employee, records)
+        return _calc_monthly_salary(employee, records, year_month, leave_records, holiday_bonuses)
+    return _calc_hourly_salary(employee, records, holiday_bonuses)
 
 
-def _calc_hourly_salary(employee, records):
+def _calc_hourly_salary(employee, records, holiday_bonuses=None):
+    if holiday_bonuses is None:
+        holiday_bonuses = []
     hourly_wage = employee.get('hourly_wage') or 200
 
     work_shifts = total_late = total_ot = 0
@@ -67,6 +91,7 @@ def _calc_hourly_salary(employee, records):
     base_pay = round(hourly_wage * HOURS_PER_SHIFT * work_shifts)
     ot_pay = calc_overtime_pay(hourly_wage, total_ot)
     late_deduct = calc_late_deduction(hourly_wage, total_late)
+    holiday_bonus = sum(b['bonus_amount'] for b in holiday_bonuses)
 
     return {
         'salary_type': 'hourly',
@@ -77,14 +102,20 @@ def _calc_hourly_salary(employee, records):
         'base_pay': base_pay,
         'overtime_pay': ot_pay,
         'late_deduction': late_deduct,
-        'net_pay': base_pay + ot_pay - late_deduct,
+        'leave_deduction': 0,
+        'holiday_bonus': holiday_bonus,
+        'net_pay': base_pay + ot_pay - late_deduct + holiday_bonus,
         'hourly_rate': hourly_wage,
         'pay_days': None,
         'total_days': None,
     }
 
 
-def _calc_monthly_salary(employee, records, year_month, leave_days=0):
+def _calc_monthly_salary(employee, records, year_month, leave_records=None, holiday_bonuses=None):
+    if leave_records is None:
+        leave_records = []
+    if holiday_bonuses is None:
+        holiday_bonuses = []
     monthly_salary = employee.get('monthly_salary') or 0
     hourly_rate = monthly_salary / 240  # 30天 × 8小時
 
@@ -123,7 +154,8 @@ def _calc_monthly_salary(employee, records, year_month, leave_days=0):
 
     ot_pay = calc_overtime_pay(hourly_rate, total_ot)
     late_deduct = round(hourly_rate * total_late / 60)
-    leave_deduct = calc_leave_deduction(monthly_salary, leave_days)
+    leave_deduct = calc_leave_deduction_by_records(monthly_salary, leave_records)
+    holiday_bonus = sum(b['bonus_amount'] for b in holiday_bonuses)
 
     return {
         'salary_type': 'monthly',
@@ -131,12 +163,14 @@ def _calc_monthly_salary(employee, records, year_month, leave_days=0):
         'work_shifts': work_shifts,
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
-        'leave_days': leave_days,
+        'leave_days': len(leave_records),
+        'leave_records': leave_records,
         'base_pay': base_pay,
         'overtime_pay': ot_pay,
         'late_deduction': late_deduct,
         'leave_deduction': leave_deduct,
-        'net_pay': base_pay + ot_pay - late_deduct - leave_deduct,
+        'holiday_bonus': holiday_bonus,
+        'net_pay': base_pay + ot_pay - late_deduct - leave_deduct + holiday_bonus,
         'hourly_rate': round(hourly_rate),
         'pay_days': pay_days,
         'total_days': total_days,
