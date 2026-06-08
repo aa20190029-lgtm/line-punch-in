@@ -238,7 +238,15 @@ def handle_state(line_user_id, text, state, data):
         if text in ['取消', '算了']:
             clear_temp_state(line_user_id)
             return '已取消GPS設定。'
-        return qr('請分享店家位置', ['📍分享位置', '取消'])
+        # 接受手動輸入座標，格式：緯度,經度（例：25.0478,121.5319）
+        import re
+        coord_match = re.match(r'^(-?\d+\.?\d*)\s*[,，]\s*(-?\d+\.?\d*)$', text.strip())
+        if coord_match:
+            lat = float(coord_match.group(1))
+            lng = float(coord_match.group(2))
+            set_temp_state(line_user_id, 'set_store_gps_radius', f'{lat},{lng}')
+            return f'✅ 已收到店家座標\n{lat:.6f}, {lng:.6f}\n\n請輸入打卡範圍（公尺，建議100）：'
+        return qr('請分享店家位置，或直接輸入座標\n例：25.0478,121.5319', ['📍分享位置', '取消'])
 
     # GPS 半徑設定
     if state == 'set_store_gps_radius':
@@ -843,7 +851,7 @@ def handle_monthly_report():
 
 def handle_gps_setup_start(line_user_id):
     set_temp_state(line_user_id, 'set_store_gps')
-    return qr('請分享店家的位置', ['📍分享位置'])
+    return qr('請分享店家位置，或直接輸入座標\n例：25.0478,121.5319\n\n📌 Google Maps 找座標：搜尋店址 → 長按地圖 → 複製上方數字', ['📍分享位置', '取消'])
 
 
 def handle_gps_toggle(enable):
