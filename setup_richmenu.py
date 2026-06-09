@@ -159,9 +159,9 @@ def draw_grid_lines(draw, W, H, rows, cols):
 
 
 def create_employee_image():
-    """員工選單：6格 2×3，蔬菜主題"""
+    """員工選單：6格 3×2（橫排3個），蔬菜主題"""
     W, H = 2500, 1686
-    CW, CH = W // 2, H // 3
+    CW, CH = W // 3, H // 2
 
     img = Image.new('RGB', (W, H), '#111820')
     draw = ImageDraw.Draw(img)
@@ -169,22 +169,22 @@ def create_employee_image():
     font_emoji = load_emoji_font(200)
     font_lbl = load_font(95)
 
-    # 蔬菜主題：青花椰菜/南瓜/玉米筍/娃娃菜/櫻桃/香草
+    # 蔬菜主題：花椰菜/番茄/玉米/娃娃菜/小黃瓜/南瓜
     cells = [
-        ('#1a5c2a', '🥦', '上班打卡'),
-        ('#7a3200', '🎃', '下班打卡'),
-        ('#7a6200', '🌽', '查本月薪資'),
-        ('#1a4a38', '🥬', '查打卡記錄'),
+        ('#1a5c2a', '🥦', '早班打卡'),
+        ('#a3271f', '🍅', '晚班打卡'),
+        ('#7a6200', '🌽', '查薪資'),
+        ('#1a4a38', '🥬', '查記錄'),
         ('#1a4d2e', '🥒', '登記'),
-        ('#1c3d1a', '🫛', '說明'),
+        ('#7a3200', '🎃', '說明'),
     ]
 
     for i, (color, emoji, lbl) in enumerate(cells):
-        col = i % 2
-        row = i // 2
+        col = i % 3
+        row = i // 3
         draw_veg_cell(img, draw, col * CW, row * CH, CW, CH, color, emoji, lbl, font_emoji, font_lbl)
 
-    draw_grid_lines(draw, W, H, 3, 2)
+    draw_grid_lines(draw, W, H, 2, 3)
     return img
 
 
@@ -289,15 +289,19 @@ def setup():
     print('🗑  清除舊圖文選單...')
     delete_all_rich_menus()
 
-    # 員工選單 區域定義（2×3 格，每格 1250×562）
-    BW, EBH = 1250, 562
+    # 員工選單 區域定義（3×2 格，橫排3個）
+    # 圖片上的字是「查薪資/查記錄」，但點下去送出的是系統完整指令文字
+    BW = 1250                              # 老闆選單用（2 欄）
+    C0, C1, C2 = 0, 833, 1666              # 員工選單三欄 x 座標
+    CW0, CW1, CW2 = 833, 833, 834          # 三欄寬度（最後一欄補足到 2500）
+    R0, R1, RH = 0, 843, 843               # 兩列 y 座標與列高
     emp_areas = [
-        make_message_area(0,       0,       BW, EBH, '上班打卡'),
-        make_message_area(BW,      0,       BW, EBH, '下班打卡'),
-        make_message_area(0,       EBH,     BW, EBH, '查本月薪資'),
-        make_message_area(BW,      EBH,     BW, EBH, '查打卡記錄'),
-        make_message_area(0,       EBH * 2, BW, EBH, '登記'),
-        make_message_area(BW,      EBH * 2, BW, EBH, '說明'),
+        make_message_area(C0, R0, CW0, RH, '早班打卡'),
+        make_message_area(C1, R0, CW1, RH, '晚班打卡'),
+        make_message_area(C2, R0, CW2, RH, '查本月薪資'),
+        make_message_area(C0, R1, CW0, RH, '查打卡記錄'),
+        make_message_area(C1, R1, CW1, RH, '登記'),
+        make_message_area(C2, R1, CW2, RH, '說明'),
     ]
 
     # 老闆選單 區域定義（2×2 格，每格 1250×562）

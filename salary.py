@@ -44,6 +44,13 @@ def calc_late_deduction(hourly_wage, late_minutes):
     return round(hourly_wage * (late_minutes / 60))
 
 
+def calc_early_leave_deduction(hourly_wage, early_leave_minutes):
+    """早退扣款：提早下班按正常時薪扣回少做的時間（非加班 1.34 倍）"""
+    if early_leave_minutes <= 0:
+        return 0
+    return round(hourly_wage * (early_leave_minutes / 60))
+
+
 def calc_leave_deduction_by_records(monthly_salary, leave_records):
     """依假別計算請假扣款（月薪制）
     事假：月薪÷30（100%扣）
@@ -78,19 +85,21 @@ def _calc_hourly_salary(employee, records, holiday_bonuses=None):
         holiday_bonuses = []
     hourly_wage = employee.get('hourly_wage') or 200
 
-    work_shifts = total_late = total_ot = 0
+    work_shifts = total_late = total_ot = total_early_leave = 0
     unique_dates = set()
     for r in records:
         if r['punch_in']:
             work_shifts += 1
             total_late += r.get('late_minutes') or 0
             total_ot += r.get('overtime_minutes') or 0
+            total_early_leave += r.get('early_leave_minutes') or 0
             unique_dates.add(r['date'])
 
     work_days = len(unique_dates)
     base_pay = round(hourly_wage * HOURS_PER_SHIFT * work_shifts)
     ot_pay = calc_overtime_pay(hourly_wage, total_ot)
     late_deduct = calc_late_deduction(hourly_wage, total_late)
+    early_leave_deduct = calc_early_leave_deduction(hourly_wage, total_early_leave)
     holiday_bonus = sum(b['bonus_amount'] for b in holiday_bonuses)
 
     return {
@@ -99,12 +108,14 @@ def _calc_hourly_salary(employee, records, holiday_bonuses=None):
         'work_shifts': work_shifts,
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
+        'total_early_leave_minutes': total_early_leave,
         'base_pay': base_pay,
         'overtime_pay': ot_pay,
         'late_deduction': late_deduct,
+        'early_leave_deduction': early_leave_deduct,
         'leave_deduction': 0,
         'holiday_bonus': holiday_bonus,
-        'net_pay': base_pay + ot_pay - late_deduct + holiday_bonus,
+        'net_pay': base_pay + ot_pay - late_deduct - early_leave_deduct + holiday_bonus,
         'hourly_rate': hourly_wage,
         'pay_days': None,
         'total_days': None,
@@ -119,13 +130,14 @@ def _calc_monthly_salary(employee, records, year_month, leave_records=None, holi
     monthly_salary = employee.get('monthly_salary') or 0
     hourly_rate = monthly_salary / 240  # 30天 × 8小時
 
-    work_shifts = total_late = total_ot = 0
+    work_shifts = total_late = total_ot = total_early_leave = 0
     unique_dates = set()
     for r in records:
         if r['punch_in']:
             work_shifts += 1
             total_late += r.get('late_minutes') or 0
             total_ot += r.get('overtime_minutes') or 0
+            total_early_leave += r.get('early_leave_minutes') or 0
             unique_dates.add(r['date'])
 
     work_days = len(unique_dates)
@@ -154,6 +166,7 @@ def _calc_monthly_salary(employee, records, year_month, leave_records=None, holi
 
     ot_pay = calc_overtime_pay(hourly_rate, total_ot)
     late_deduct = round(hourly_rate * total_late / 60)
+    early_leave_deduct = round(hourly_rate * total_early_leave / 60)
     leave_deduct = calc_leave_deduction_by_records(monthly_salary, leave_records)
     holiday_bonus = sum(b['bonus_amount'] for b in holiday_bonuses)
 
@@ -163,14 +176,16 @@ def _calc_monthly_salary(employee, records, year_month, leave_records=None, holi
         'work_shifts': work_shifts,
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
+        'total_early_leave_minutes': total_early_leave,
         'leave_days': len(leave_records),
         'leave_records': leave_records,
         'base_pay': base_pay,
         'overtime_pay': ot_pay,
         'late_deduction': late_deduct,
+        'early_leave_deduction': early_leave_deduct,
         'leave_deduction': leave_deduct,
         'holiday_bonus': holiday_bonus,
-        'net_pay': base_pay + ot_pay - late_deduct - leave_deduct + holiday_bonus,
+        'net_pay': base_pay + ot_pay - late_deduct - early_leave_deduct - leave_deduct + holiday_bonus,
         'hourly_rate': round(hourly_rate),
         'pay_days': pay_days,
         'total_days': total_days,

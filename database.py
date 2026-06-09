@@ -103,6 +103,8 @@ def init_db():
         # 出勤表：新增班次欄位
         cur.execute("ALTER TABLE attendance ADD COLUMN IF NOT EXISTS shift_number INTEGER DEFAULT 1")
         cur.execute("ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE")
+        # 出勤表：新增早退分鐘欄位（提早下班，按正常時薪扣款）
+        cur.execute("ALTER TABLE attendance ADD COLUMN IF NOT EXISTS early_leave_minutes INTEGER DEFAULT 0")
 
         # 修改唯一約束：改為 (employee_id, date, shift_number)
         cur.execute("""
@@ -321,34 +323,35 @@ def punch_in(employee_id, date_str, time_str, late_minutes, shift_number=1):
         conn.close()
 
 
-def punch_out(employee_id, date_str, time_str, overtime_minutes, shift_number=1):
+def punch_out(employee_id, date_str, time_str, overtime_minutes, shift_number=1, early_leave_minutes=0):
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            """UPDATE attendance SET punch_out = %s, overtime_minutes = %s
+            """UPDATE attendance SET punch_out = %s, overtime_minutes = %s, early_leave_minutes = %s
                WHERE employee_id = %s AND date = %s AND shift_number = %s""",
-            (time_str, overtime_minutes, employee_id, date_str, shift_number)
+            (time_str, overtime_minutes, early_leave_minutes, employee_id, date_str, shift_number)
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def add_manual_punch(employee_id, date_str, shift_number, punch_in_time, punch_out_time, late_minutes, overtime_minutes):
+def add_manual_punch(employee_id, date_str, shift_number, punch_in_time, punch_out_time,
+                     late_minutes, overtime_minutes, early_leave_minutes=0):
     """老闆補打卡"""
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute(
             """INSERT INTO attendance
-               (employee_id, date, shift_number, punch_in, punch_out, late_minutes, overtime_minutes, is_manual)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+               (employee_id, date, shift_number, punch_in, punch_out, late_minutes, overtime_minutes, early_leave_minutes, is_manual)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
                ON CONFLICT ON CONSTRAINT attendance_employee_id_date_shift_key
-               DO UPDATE SET punch_in = %s, punch_out = %s, late_minutes = %s, overtime_minutes = %s, is_manual = TRUE""",
+               DO UPDATE SET punch_in = %s, punch_out = %s, late_minutes = %s, overtime_minutes = %s, early_leave_minutes = %s, is_manual = TRUE""",
             (employee_id, date_str, shift_number, punch_in_time, punch_out_time,
-             late_minutes, overtime_minutes,
-             punch_in_time, punch_out_time, late_minutes, overtime_minutes)
+             late_minutes, overtime_minutes, early_leave_minutes,
+             punch_in_time, punch_out_time, late_minutes, overtime_minutes, early_leave_minutes)
         )
         conn.commit()
     finally:

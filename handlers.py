@@ -14,24 +14,32 @@ from database import (
     add_holiday_bonus, get_monthly_holiday_bonuses,
 )
 from salary import (
-    calc_overtime_pay, calc_late_deduction, calc_monthly_summary,
+    calc_overtime_pay, calc_late_deduction, calc_early_leave_deduction, calc_monthly_summary,
     roc_to_iso, HOURS_PER_SHIFT, LEAVE_TYPE_LABELS,
 )
 from line_config import link_user_to_boss_menu, link_user_to_employee_menu
 
 TZ = pytz.timezone('Asia/Taipei')
 
-# 固定班次設定
+# 固定班次設定（不限制打卡時間，遲到/加班/早退一律以班別時間為準）
 SHIFTS = {
-    1: {'start': '10:30', 'end': '14:30', 'window_start': 600,  'window_end': 900},   # 10:00-15:00
-    2: {'start': '16:30', 'end': '20:30', 'window_start': 960,  'window_end': 1260},  # 16:00-21:00
+    1: {'name': '早班', 'start': '10:30', 'end': '14:30'},
+    2: {'name': '晚班', 'start': '16:30', 'end': '20:30'},
 }
 
+# 上下班前後緩衝（分鐘）：落在緩衝內算準時，不計加班、不計遲到/早退
+GRACE_MIN = 15
+
 EMPLOYEE_HELP = """📋 打卡說明
-上班：點「上班打卡」
-下班：點「下班打卡」
-第一班：10:30 上班 / 14:30 下班
-第二班：16:30 上班 / 20:30 下班
+早班：點「早班打卡」(第一次=上班、第二次=下班)
+晚班：點「晚班打卡」(第一次=上班、第二次=下班)
+早班：10:30 上班 / 14:30 下班
+晚班：16:30 上班 / 20:30 下班
+
+⏰ 隨時都能打卡，不限時間
+・早到超過 15 分鐘 → 算加班
+・超過上班時間 → 算遲到
+・提早超過 15 分鐘下班 → 算早退扣款
 
 查詢：點「查本月薪資」或「查打卡記錄」
 首次使用：點「登記」輸入姓名"""
@@ -66,14 +74,10 @@ def is_boss(line_user_id):
     return bool(boss_id) and boss_id == line_user_id
 
 
-def get_shift_by_time(t):
-    """根據時間判斷班次，回傳 (shift_num, start, end) 或 (None, None, None)"""
+def _to_min(t):
+    """'HH:MM' → 當日總分鐘數"""
     h, m = map(int, t.split(':'))
-    total = h * 60 + m
-    for num, info in SHIFTS.items():
-        if info['window_start'] <= total <= info['window_end']:
-            return num, info['start'], info['end']
-    return None, None, None
+    return h * 60 + m
 
 
 def parse_time_input(text):
@@ -86,18 +90,28 @@ def parse_time_input(text):
     return None
 
 
-def calc_late(punch_time, shift_start, grace=5):
-    ph, pm = map(int, punch_time.split(':'))
-    sh, sm = map(int, shift_start.split(':'))
-    late = (ph * 60 + pm) - (sh * 60 + sm + grace)
+def calc_late(punch_in_time, shift_start):
+    """遲到分鐘：超過上班時間就算，無寬限（早到回 0）"""
+    late = _to_min(punch_in_time) - _to_min(shift_start)
     return max(0, late)
 
 
+def calc_early_overtime(punch_in_time, shift_start):
+    """提早上班加班分鐘：早到超過 15 分鐘才算，且從上班時間整段算（B 算法）"""
+    diff = _to_min(shift_start) - _to_min(punch_in_time)
+    return diff if diff > GRACE_MIN else 0
+
+
 def calc_overtime(punch_out_time, shift_end):
-    oh, om = map(int, punch_out_time.split(':'))
-    sh, sm = map(int, shift_end.split(':'))
-    ot = (oh * 60 + om) - (sh * 60 + sm)
-    return max(0, ot)
+    """下班後加班分鐘：晚走超過 15 分鐘才算，且從下班時間整段算"""
+    diff = _to_min(punch_out_time) - _to_min(shift_end)
+    return diff if diff > GRACE_MIN else 0
+
+
+def calc_early_leave(punch_out_time, shift_end):
+    """早退分鐘：提早下班超過 15 分鐘才算，且從下班時間整段算"""
+    diff = _to_min(shift_end) - _to_min(punch_out_time)
+    return diff if diff > GRACE_MIN else 0
 
 
 def worked_hours(punch_in_t, punch_out_t):
@@ -148,12 +162,17 @@ def handle_message(line_user_id, text):
             return EMPLOYEE_HELP
         return qr('歡迎使用非晉餐廚打卡系統！\n\n請點「登記」輸入姓名完成綁定。', ['登記'])
 
-    # ── 員工打卡 ──
-    if text in ['上班打卡', '打卡上班']:
-        return handle_punch_in(line_user_id)
+    # ── 員工打卡（早班/晚班各一顆鈕，第一次=上班、第二次=下班）──
+    if text in ['早班打卡', '早班', '🌅 早班打卡', '🥦 早班打卡']:
+        return handle_shift_punch(line_user_id, 1)
 
-    if text in ['下班打卡', '打卡下班']:
-        return handle_punch_out(line_user_id)
+    if text in ['晚班打卡', '晚班', '🌙 晚班打卡', '🍅 晚班打卡']:
+        return handle_shift_punch(line_user_id, 2)
+
+    # 舊按鈕相容：提示改用早班/晚班
+    if text in ['上班打卡', '打卡上班', '下班打卡', '打卡下班']:
+        return qr('請改點「早班打卡」或「晚班打卡」\n（同一顆鈕第一次=上班、第二次=下班）',
+                  ['早班打卡', '晚班打卡'])
 
     if text in ['查本月薪資', '我的本月', '本月出勤']:
         return handle_my_month(line_user_id)
@@ -165,7 +184,7 @@ def handle_message(line_user_id, text):
     if text in ['登記', '加入', '我要登記']:
         emp = get_employee_by_line_id(line_user_id)
         if emp:
-            return qr(f'✅ 你已登記為「{emp["name"]}」', ['上班打卡', '說明'])
+            return qr(f'✅ 你已登記為「{emp["name"]}」', ['早班打卡', '晚班打卡', '說明'])
         set_temp_state(line_user_id, 'register_name')
         return '📝 請輸入你的姓名（中文）：'
 
@@ -287,7 +306,7 @@ def handle_state(line_user_id, text, state, data):
             clear_temp_state(line_user_id)
             if ok:
                 link_user_to_employee_menu(line_user_id)
-                return qr(f'✅ 登記成功！歡迎，{name}！\n\n可以開始打卡了。', ['上班打卡', '說明'])
+                return qr(f'✅ 登記成功！歡迎，{name}！\n\n可以開始打卡了。', ['早班打卡', '晚班打卡', '說明'])
         # 找不到未綁定的員工
         clear_temp_state(line_user_id)
         return ('❌ 找不到你的資料。\n\n'
@@ -535,20 +554,20 @@ def handle_state(line_user_id, text, state, data):
             return '❌ 日期無效，請重新輸入（如：0608）。'
         set_temp_state(line_user_id, 'boss_manual_shift', f'{emp_id}|{date_iso}')
         return qr(f'日期：{date_iso}\n\n請選擇班次：',
-                  ['第一班（10:30-14:30）', '第二班（16:30-20:30）'])
+                  ['早班（10:30-14:30）', '晚班（16:30-20:30）'])
 
     if state == 'boss_manual_shift':
         parts = data.split('|', 1)
         emp_id, date_iso = int(parts[0]), parts[1]
-        if '第一班' in text:
+        if '早班' in text or '第一班' in text:
             shift_num, s_start, s_end = 1, '10:30', '14:30'
-        elif '第二班' in text:
+        elif '晚班' in text or '第二班' in text:
             shift_num, s_start, s_end = 2, '16:30', '20:30'
         else:
             clear_temp_state(line_user_id)
             return '❌ 請選擇班次。'
         set_temp_state(line_user_id, 'boss_manual_in', f'{emp_id}|{date_iso}|{shift_num}|{s_start}|{s_end}')
-        return f'第{shift_num}班（{s_start}-{s_end}）\n\n請輸入上班時間（如：1025 或 10:25）：'
+        return f'{SHIFTS[shift_num]["name"]}（{s_start}-{s_end}）\n\n請輸入上班時間（如：1025 或 10:25）：'
 
     if state == 'boss_manual_in':
         parts = data.split('|', 4)
@@ -574,14 +593,19 @@ def handle_state(line_user_id, text, state, data):
                 clear_temp_state(line_user_id)
                 return '❌ 時間格式有誤（如：1430）。'
 
-        grace = int(get_config('late_grace_minutes') or 5)
-        late = calc_late(pin_time, s_start, grace)
-        ot = calc_overtime(pout_time, s_end) if pout_time else 0
-        add_manual_punch(emp_id, date_iso, shift_num, pin_time, pout_time, late, ot)
+        late = calc_late(pin_time, s_start)
+        early_ot = calc_early_overtime(pin_time, s_start)
+        if pout_time:
+            ot = early_ot + calc_overtime(pout_time, s_end)
+            early_leave = calc_early_leave(pout_time, s_end)
+        else:
+            ot = early_ot
+            early_leave = 0
+        add_manual_punch(emp_id, date_iso, shift_num, pin_time, pout_time, late, ot, early_leave)
         clear_temp_state(line_user_id)
 
         msg = (f'✅ 補打卡完成 📝\n'
-               f'日期：{date_iso}　第{shift_num}班\n'
+               f'日期：{date_iso}　{SHIFTS[shift_num]["name"]}\n'
                f'上班：{pin_time}')
         if late > 0:
             msg += f' ⚠️遲{late}分'
@@ -589,6 +613,8 @@ def handle_state(line_user_id, text, state, data):
             msg += f'\n下班：{pout_time}'
             if ot > 0:
                 msg += f' 加班{ot}分'
+            if early_leave > 0:
+                msg += f' 早退{early_leave}分'
         return msg
 
     clear_temp_state(line_user_id)
@@ -637,95 +663,70 @@ def handle_location(line_user_id, lat, lng):
 #  打卡邏輯
 # ──────────────────────────────────────────
 
-def handle_punch_in(line_user_id):
+def handle_shift_punch(line_user_id, shift_num):
+    """早班/晚班打卡：同一顆鈕，今天該班還沒上班→打上班；已上班還沒下班→打下班"""
     emp = get_employee_by_line_id(line_user_id)
     if not emp:
         return qr('❌ 你尚未登記。請點「登記」。', ['登記'])
 
-    t = time_str()
-    shift_num, s_start, s_end = get_shift_by_time(t)
-    if shift_num is None:
-        return ('❌ 目前不在班表時間內\n\n'
-                '第一班上班：10:00–15:00\n'
-                '第二班上班：16:00–21:00')
-
+    shift = SHIFTS[shift_num]
     today = today_str()
     record = get_today_shift_attendance(emp['id'], today, shift_num)
-    if record and record['punch_in']:
-        return f'⚠️ 第{shift_num}班已打過上班卡！\n時間：{record["punch_in"]}'
+
+    # 判斷這次是「上班」還是「下班」
+    if record and record['punch_in'] and record['punch_out']:
+        return qr(f'⚠️ {shift["name"]}今天上下班都打過了\n'
+                  f'上班：{record["punch_in"]}　下班：{record["punch_out"]}',
+                  ['查打卡記錄', '查本月薪資'])
+
+    is_punch_in = not (record and record['punch_in'])
+    pending_state = 'pending_punch_in' if is_punch_in else 'pending_punch_out'
+    action_label = '上班' if is_punch_in else '下班'
 
     gps_enabled = get_config('gps_enabled') == '1'
     if gps_enabled:
-        set_temp_state(line_user_id, 'pending_punch_in', str(shift_num))
-        return qr(f'📍 GPS打卡\n請分享你的位置完成第{shift_num}班上班打卡：', ['📍分享位置'])
+        set_temp_state(line_user_id, pending_state, str(shift_num))
+        return qr(f'📍 GPS打卡\n請分享你的位置完成{shift["name"]}{action_label}打卡：', ['📍分享位置'])
 
-    return _do_punch_in(line_user_id, shift_num)
-
-
-def handle_punch_out(line_user_id):
-    emp = get_employee_by_line_id(line_user_id)
-    if not emp:
-        return qr('❌ 你尚未登記。請點「登記」。', ['登記'])
-
-    t = time_str()
-    shift_num, s_start, s_end = get_shift_by_time(t)
-    if shift_num is None:
-        return ('❌ 目前不在班表時間內\n\n'
-                '第一班下班：10:00–15:00\n'
-                '第二班下班：16:00–21:00')
-
-    today = today_str()
-    record = get_today_shift_attendance(emp['id'], today, shift_num)
-    if not record or not record['punch_in']:
-        return f'❌ 第{shift_num}班還沒打上班卡！\n請先點「上班打卡」。'
-    if record['punch_out']:
-        return f'⚠️ 第{shift_num}班已打過下班卡！\n時間：{record["punch_out"]}'
-
-    gps_enabled = get_config('gps_enabled') == '1'
-    if gps_enabled:
-        set_temp_state(line_user_id, 'pending_punch_out', str(shift_num))
-        return qr(f'📍 GPS打卡\n請分享你的位置完成第{shift_num}班下班打卡：', ['📍分享位置'])
-
+    if is_punch_in:
+        return _do_punch_in(line_user_id, shift_num)
     return _do_punch_out(line_user_id, shift_num)
 
 
-def _do_punch_in(line_user_id, shift_num=None):
+def _do_punch_in(line_user_id, shift_num):
     emp = get_employee_by_line_id(line_user_id)
     t = time_str()
-    if shift_num is None:
-        shift_num, _, _ = get_shift_by_time(t)
-    if shift_num is None:
-        return '❌ 目前不在班表時間內。'
-
     shift = SHIFTS[shift_num]
-    grace = int(get_config('late_grace_minutes') or 5)
-    late = calc_late(t, shift['start'], grace)
+
+    late = calc_late(t, shift['start'])
+    early_ot = calc_early_overtime(t, shift['start'])
     punch_in(emp['id'], today_str(), t, late, shift_num)
 
-    msg = (f'✅ 上班打卡成功\n'
-           f'{emp["name"]}　第{shift_num}班\n'
+    msg = (f'✅ {shift["name"]}上班打卡成功\n'
+           f'{emp["name"]}\n'
            f'時間：{t}　（班表 {shift["start"]}）')
     if late > 0:
         msg += f'\n⚠️ 遲到 {late} 分鐘'
+    elif early_ot > 0:
+        msg += f'\n⏱ 提早 {early_ot} 分鐘 → 算加班'
     else:
         msg += '\n準時！'
-    return qr(msg, ['下班打卡', '查打卡記錄'])
+    return qr(msg, [f'{shift["name"]}打卡', '查打卡記錄'])
 
 
-def _do_punch_out(line_user_id, shift_num=None):
+def _do_punch_out(line_user_id, shift_num):
     emp = get_employee_by_line_id(line_user_id)
     t = time_str()
-    if shift_num is None:
-        shift_num, _, _ = get_shift_by_time(t)
-    if shift_num is None:
-        return '❌ 目前不在班表時間內。'
-
     shift = SHIFTS[shift_num]
     today = today_str()
     record = get_today_shift_attendance(emp['id'], today, shift_num)
 
-    ot = calc_overtime(t, shift['end'])
-    punch_out(emp['id'], today, t, ot, shift_num)
+    # 加班 = 提早上班分鐘 + 晚走分鐘；早退 = 提早下班分鐘
+    early_ot = calc_early_overtime(record['punch_in'], shift['start']) if record and record['punch_in'] else 0
+    late_ot = calc_overtime(t, shift['end'])
+    ot = early_ot + late_ot
+    early_leave = calc_early_leave(t, shift['end'])
+    punch_out(emp['id'], today, t, ot, shift_num, early_leave)
     worked = worked_hours(record['punch_in'], t) if record else 0
 
     salary_type = emp.get('salary_type') or 'hourly'
@@ -734,12 +735,15 @@ def _do_punch_out(line_user_id, shift_num=None):
     else:
         hourly_rate = emp.get('hourly_wage') or 200
 
-    msg = (f'✅ 下班打卡成功\n'
-           f'{emp["name"]}　第{shift_num}班\n'
+    msg = (f'✅ {shift["name"]}下班打卡成功\n'
+           f'{emp["name"]}\n'
            f'時間：{t}　工作 {worked:.1f} 小時')
     if ot > 0:
         ot_pay = calc_overtime_pay(hourly_rate, ot)
         msg += f'\n加班 {ot} 分鐘（+{ot_pay} 元）'
+    if early_leave > 0:
+        el_deduct = calc_early_leave_deduction(hourly_rate, early_leave)
+        msg += f'\n早退 {early_leave} 分鐘（-{el_deduct} 元）'
     if record and record.get('late_minutes', 0) and record['late_minutes'] > 0:
         late_deduct = calc_late_deduction(hourly_rate, record['late_minutes'])
         msg += f'\n遲到 {record["late_minutes"]} 分鐘（-{late_deduct} 元）'
@@ -759,25 +763,26 @@ def handle_my_today(line_user_id):
     records = get_today_all_shifts(emp['id'], today)
 
     if not records:
-        return qr(f'📅 {today}\n今日尚未打卡。', ['上班打卡'])
+        return qr(f'📅 {today}\n今日尚未打卡。', ['早班打卡', '晚班打卡'])
 
     msg = f'📅 {emp["name"]} {today}\n'
     for r in records:
         sn = r.get('shift_number') or 1
         shift = SHIFTS.get(sn, SHIFTS[1])
         manual_tag = ' 📝補' if r.get('is_manual') else ''
-        msg += f'\n第{sn}班（{shift["start"]}-{shift["end"]}）{manual_tag}'
+        msg += f'\n{shift["name"]}（{shift["start"]}-{shift["end"]}）{manual_tag}'
         if r['punch_in']:
             late_tag = f' ⚠️遲{r["late_minutes"]}分' if r.get('late_minutes', 0) and r['late_minutes'] > 0 else ''
             msg += f'\n  上班：{r["punch_in"]}{late_tag}'
         if r['punch_out']:
             w = worked_hours(r['punch_in'], r['punch_out'])
             ot_tag = f' +加班{r["overtime_minutes"]}分' if r.get('overtime_minutes', 0) and r['overtime_minutes'] > 0 else ''
-            msg += f'\n  下班：{r["punch_out"]}（{w:.1f}h）{ot_tag}'
+            el_tag = f' 早退{r["early_leave_minutes"]}分' if r.get('early_leave_minutes', 0) and r['early_leave_minutes'] > 0 else ''
+            msg += f'\n  下班：{r["punch_out"]}（{w:.1f}h）{ot_tag}{el_tag}'
         else:
             msg += '\n  下班：尚未打卡'
 
-    return qr(msg, ['上班打卡', '查本月薪資'])
+    return qr(msg, ['早班打卡', '晚班打卡', '查本月薪資'])
 
 
 def handle_my_month(line_user_id):
@@ -802,6 +807,8 @@ def handle_my_month(line_user_id):
         msg += f'請假：{_format_leave_summary(leave_records)}\n'
     if s['total_late_minutes'] > 0:
         msg += f'遲到：{s["total_late_minutes"]} 分鐘\n'
+    if s.get('total_early_leave_minutes', 0) > 0:
+        msg += f'早退：{s["total_early_leave_minutes"]} 分鐘\n'
     if s['total_overtime_minutes'] > 0:
         msg += f'加班：{s["total_overtime_minutes"]} 分鐘\n'
     msg += '\n💰 薪資估算\n'
@@ -819,6 +826,8 @@ def handle_my_month(line_user_id):
         msg += f'假日加班：+{s["holiday_bonus"]:,} 元\n'
     if s['late_deduction'] > 0:
         msg += f'遲到扣：-{s["late_deduction"]:,} 元\n'
+    if s.get('early_leave_deduction', 0) > 0:
+        msg += f'早退扣：-{s["early_leave_deduction"]:,} 元\n'
     if s.get('leave_deduction', 0) > 0:
         msg += f'請假扣：-{s["leave_deduction"]:,} 元\n'
     msg += f'應領：{s["net_pay"]:,} 元'
@@ -907,10 +916,11 @@ def handle_today_attendance():
             parts = []
             for r in records:
                 sn = r.get('shift_number') or 1
+                sname = SHIFTS.get(sn, SHIFTS[1])['name']
                 if r['punch_in'] and r['punch_out']:
-                    parts.append(f'第{sn}班✅')
+                    parts.append(f'{sname}✅')
                 elif r['punch_in']:
-                    parts.append(f'第{sn}班🟡上班中')
+                    parts.append(f'{sname}🟡上班中')
             msg += f'\n{emp["name"]}：{"　".join(parts) if parts else "❌ 未打卡"}'
     return qr(msg, ['薪資報表', '員工管理'])
 
@@ -934,6 +944,8 @@ def handle_query_employee(name):
         msg += f'請假：{_format_leave_summary(leave_records)}\n'
     if s['total_late_minutes'] > 0:
         msg += f'遲到：{s["total_late_minutes"]} 分鐘\n'
+    if s.get('total_early_leave_minutes', 0) > 0:
+        msg += f'早退：{s["total_early_leave_minutes"]} 分鐘\n'
     if s['total_overtime_minutes'] > 0:
         msg += f'加班：{s["total_overtime_minutes"]} 分鐘\n'
     msg += '\n💰 薪資\n'
@@ -951,6 +963,8 @@ def handle_query_employee(name):
         msg += f'假日加班：+{s["holiday_bonus"]:,} 元\n'
     if s['late_deduction'] > 0:
         msg += f'遲到扣：-{s["late_deduction"]:,} 元\n'
+    if s.get('early_leave_deduction', 0) > 0:
+        msg += f'早退扣：-{s["early_leave_deduction"]:,} 元\n'
     if s.get('leave_deduction', 0) > 0:
         msg += f'請假扣：-{s["leave_deduction"]:,} 元\n'
     msg += f'應領：{s["net_pay"]:,} 元'
@@ -959,11 +973,13 @@ def handle_query_employee(name):
         if r['punch_in']:
             day = r['date'][5:]
             sn = r.get('shift_number') or 1
+            sname = SHIFTS.get(sn, SHIFTS[1])['name']
             po = r['punch_out'] or '未打下班'
             late_m = f' ⚠️遲{r["late_minutes"]}分' if r.get('late_minutes', 0) and r['late_minutes'] > 0 else ''
             ot_m = f' 加{r["overtime_minutes"]}分' if r.get('overtime_minutes', 0) and r['overtime_minutes'] > 0 else ''
+            el_m = f' 早退{r["early_leave_minutes"]}分' if r.get('early_leave_minutes', 0) and r['early_leave_minutes'] > 0 else ''
             manual = ' 📝' if r.get('is_manual') else ''
-            msg += f'\n{day} 第{sn}班 {r["punch_in"]}-{po}{late_m}{ot_m}{manual}'
+            msg += f'\n{day} {sname} {r["punch_in"]}-{po}{late_m}{ot_m}{el_m}{manual}'
     return msg
 
 
@@ -983,11 +999,12 @@ def handle_monthly_report():
         salary_type = emp.get('salary_type') or 'hourly'
         salary_hint = '月薪' if salary_type == 'monthly' else '時薪'
         late_info = f' 遲{s["total_late_minutes"]}分' if s['total_late_minutes'] > 0 else ''
+        el_info = f' 早退{s["total_early_leave_minutes"]}分' if s.get('total_early_leave_minutes', 0) > 0 else ''
         ot_info = f' 加{s["total_overtime_minutes"]}分' if s['total_overtime_minutes'] > 0 else ''
         leave_info = f' 假{len(leave_recs)}天' if leave_recs else ''
         holiday_info = f' 假日+{s["holiday_bonus"]:,}' if s.get('holiday_bonus', 0) > 0 else ''
         shifts_info = f'{s["work_days"]}天{s["work_shifts"]}班'
-        msg += f'\n{emp["name"]}（{salary_hint}）：{shifts_info}{late_info}{ot_info}{leave_info}{holiday_info}\n  應領 {s["net_pay"]:,} 元\n'
+        msg += f'\n{emp["name"]}（{salary_hint}）：{shifts_info}{late_info}{el_info}{ot_info}{leave_info}{holiday_info}\n  應領 {s["net_pay"]:,} 元\n'
     msg += f'{"─"*18}\n全員合計：{total:,} 元'
     return qr(msg, ['今日出勤', '員工管理'])
 
