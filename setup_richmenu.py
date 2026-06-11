@@ -276,6 +276,24 @@ def make_message_area(x, y, w, h, text):
     }
 
 
+def make_uri_area(x, y, w, h, uri):
+    return {
+        'bounds': {'x': x, 'y': y, 'width': w, 'height': h},
+        'action': {'type': 'uri', 'uri': uri}
+    }
+
+
+# LIFF 自動定位打卡：設定 LIFF_ID 後，早班/晚班鈕改成打開 LIFF 網頁（自動抓 GPS）
+LIFF_ID = os.environ.get('LIFF_ID', '')
+
+
+def shift_punch_area(x, y, w, h, shift_num, fallback_text):
+    """有設定 LIFF_ID → 打開 LIFF 自動定位打卡；否則沿用舊的文字打卡。"""
+    if LIFF_ID:
+        return make_uri_area(x, y, w, h, f'https://liff.line.me/{LIFF_ID}?shift={shift_num}')
+    return make_message_area(x, y, w, h, fallback_text)
+
+
 # ──────────────────────────────────────────
 #  主程式
 # ──────────────────────────────────────────
@@ -296,8 +314,8 @@ def setup():
     CW0, CW1, CW2 = 833, 833, 834          # 三欄寬度（最後一欄補足到 2500）
     R0, R1, RH = 0, 843, 843               # 兩列 y 座標與列高
     emp_areas = [
-        make_message_area(C0, R0, CW0, RH, '早班打卡'),
-        make_message_area(C1, R0, CW1, RH, '晚班打卡'),
+        shift_punch_area(C0, R0, CW0, RH, 1, '早班打卡'),
+        shift_punch_area(C1, R0, CW1, RH, 2, '晚班打卡'),
         make_message_area(C2, R0, CW2, RH, '查本月薪資'),
         make_message_area(C0, R1, CW0, RH, '查打卡記錄'),
         make_message_area(C1, R1, CW1, RH, '登記'),

@@ -114,10 +114,20 @@ def calc_early_leave(punch_out_time, shift_end):
     return diff if diff > GRACE_MIN else 0
 
 
-def worked_hours(punch_in_t, punch_out_t):
-    ih, im = map(int, punch_in_t.split(':'))
-    oh, om = map(int, punch_out_t.split(':'))
-    return ((oh * 60 + om) - (ih * 60 + im)) / 60
+def worked_hours(punch_in_t, punch_out_t, shift_start=None, shift_end=None):
+    """工時（小時）。前後 15 分鐘寬限內視為準時，不計入工時：
+    早到在寬限內 → 從班表上班時間起算；晚走在寬限內 → 算到班表下班時間止。"""
+    in_min = _to_min(punch_in_t)
+    out_min = _to_min(punch_out_t)
+    if shift_start is not None:
+        s = _to_min(shift_start)
+        if 0 < (s - in_min) <= GRACE_MIN:   # 早到但在寬限內
+            in_min = s
+    if shift_end is not None:
+        e = _to_min(shift_end)
+        if 0 < (out_min - e) <= GRACE_MIN:  # 晚走但在寬限內
+            out_min = e
+    return (out_min - in_min) / 60
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -659,6 +669,43 @@ def handle_location(line_user_id, lat, lng):
     return None
 
 
+def punch_with_location(line_user_id, shift_num, lat, lng):
+    """LIFF 網頁打卡：直接用手機 GPS 座標完成打卡（員工不需手動分享位置）。
+    回傳純文字訊息給網頁顯示。成功訊息以 ✅ 開頭。"""
+    emp = get_employee_by_line_id(line_user_id)
+    if not emp:
+        return '❌ 你尚未登記。\n請先回聊天室點「登記」輸入姓名完成綁定。'
+
+    if shift_num not in SHIFTS:
+        return '❌ 班別錯誤，請重新從選單打卡。'
+    shift = SHIFTS[shift_num]
+    today = today_str()
+    record = get_today_shift_attendance(emp['id'], today, shift_num)
+
+    # 今天這班上下班都打過了
+    if record and record['punch_in'] and record['punch_out']:
+        return (f'⚠️ {shift["name"]}今天上下班都打過了\n'
+                f'上班：{record["punch_in"]}　下班：{record["punch_out"]}')
+
+    # GPS 範圍檢查（GPS 開啟時才檢查）
+    if get_config('gps_enabled') == '1':
+        store_lat_str = get_config('store_lat') or ''
+        store_lng_str = get_config('store_lng') or ''
+        if not store_lat_str or not store_lng_str:
+            return '❌ 店家位置尚未設定，請聯絡老闆。'
+        dist = haversine_distance(lat, lng, float(store_lat_str), float(store_lng_str))
+        radius = float(get_config('gps_radius_meters') or 100)
+        if dist > radius:
+            return (f'❌ 不在打卡範圍內\n'
+                    f'你目前距店家約 {dist:.0f} 公尺\n'
+                    f'需在 {radius:.0f} 公尺內才能打卡')
+
+    is_punch_in = not (record and record['punch_in'])
+    result = _do_punch_in(line_user_id, shift_num) if is_punch_in else _do_punch_out(line_user_id, shift_num)
+    # _do_punch_in/out 回傳 qr dict，網頁只要文字
+    return result['text'] if isinstance(result, dict) else result
+
+
 # ──────────────────────────────────────────
 #  打卡邏輯
 # ──────────────────────────────────────────
@@ -727,7 +774,7 @@ def _do_punch_out(line_user_id, shift_num):
     ot = early_ot + late_ot
     early_leave = calc_early_leave(t, shift['end'])
     punch_out(emp['id'], today, t, ot, shift_num, early_leave)
-    worked = worked_hours(record['punch_in'], t) if record else 0
+    worked = worked_hours(record['punch_in'], t, shift['start'], shift['end']) if record else 0
 
     salary_type = emp.get('salary_type') or 'hourly'
     if salary_type == 'monthly':
@@ -775,7 +822,7 @@ def handle_my_today(line_user_id):
             late_tag = f' ⚠️遲{r["late_minutes"]}分' if r.get('late_minutes', 0) and r['late_minutes'] > 0 else ''
             msg += f'\n  上班：{r["punch_in"]}{late_tag}'
         if r['punch_out']:
-            w = worked_hours(r['punch_in'], r['punch_out'])
+            w = worked_hours(r['punch_in'], r['punch_out'], shift['start'], shift['end'])
             ot_tag = f' +加班{r["overtime_minutes"]}分' if r.get('overtime_minutes', 0) and r['overtime_minutes'] > 0 else ''
             el_tag = f' 早退{r["early_leave_minutes"]}分' if r.get('early_leave_minutes', 0) and r['early_leave_minutes'] > 0 else ''
             msg += f'\n  下班：{r["punch_out"]}（{w:.1f}h）{ot_tag}{el_tag}'
