@@ -15,8 +15,10 @@ from line_config import configuration
 app = Flask(__name__)
 handler = WebhookHandler(os.environ['LINE_CHANNEL_SECRET'])
 
-LIFF_ID = os.environ.get('LIFF_ID', '')
-LINE_LOGIN_CHANNEL_ID = os.environ.get('LINE_LOGIN_CHANNEL_ID', '')
+# LIFF / LINE Login 識別碼（非機密：LIFF ID 本就在網址中、Channel ID 為公開值）
+# 以環境變數為優先，未設定時用下列預設值，免去在 Render 另外設定
+LIFF_ID = os.environ.get('LIFF_ID', '2010369618-Zjvm8v62')
+LINE_LOGIN_CHANNEL_ID = os.environ.get('LINE_LOGIN_CHANNEL_ID', '2010369618')
 
 
 def build_text_message(reply):

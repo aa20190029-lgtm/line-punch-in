@@ -22,5 +22,6 @@ def link_user_to_boss_menu(line_user_id):
 
 
 def link_user_to_employee_menu(line_user_id):
-    menu_id = os.environ.get('EMPLOYEE_RICH_MENU_ID', '')
+    # 未設環境變數時用目前的員工選單（含 LIFF 定位打卡鈕）為預設
+    menu_id = os.environ.get('EMPLOYEE_RICH_MENU_ID', 'richmenu-964514c7e10612f2efb22488c15ed16f')
     link_user_menu(line_user_id, menu_id)
