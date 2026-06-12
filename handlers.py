@@ -732,8 +732,10 @@ def handle_shift_punch(line_user_id, shift_num):
 
     gps_enabled = get_config('gps_enabled') == '1'
     if gps_enabled:
-        set_temp_state(line_user_id, pending_state, str(shift_num))
-        return qr(f'📍 GPS打卡\n請分享你的位置完成{shift["name"]}{action_label}打卡：', ['📍分享位置'])
+        # 強制走 LIFF 自動定位：不給手動「分享位置」（避免拖圖釘作弊）
+        return (f'⚠️ 請用下方選單的「{shift["name"]}打卡」按鈕來打{action_label}卡，\n'
+                f'系統會自動抓取你的定位。\n'
+                f'（必須開啟手機定位，否則無法打卡）')
 
     if is_punch_in:
         return _do_punch_in(line_user_id, shift_num)
