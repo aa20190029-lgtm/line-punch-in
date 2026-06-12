@@ -6,7 +6,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     ApiClient, MessagingApi,
     ReplyMessageRequest, TextMessage,
-    QuickReply, QuickReplyItem, MessageAction, LocationAction
+    QuickReply, QuickReplyItem, MessageAction, LocationAction, URIAction
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, LocationMessageContent
 from handlers import handle_message, handle_location, punch_with_location
@@ -32,6 +32,11 @@ def build_text_message(reply):
     for label in qr_labels:
         if label == '📍分享位置':
             items.append(QuickReplyItem(action=LocationAction(label='分享位置')))
+        elif label in ('早班打卡', '晚班打卡'):
+            # 早/晚班打卡鈕一律開 LIFF 自動定位網頁（不走會跳手動分享位置的文字流程）
+            shift = '1' if label == '早班打卡' else '2'
+            items.append(QuickReplyItem(action=URIAction(
+                label=label[:20], uri=f'https://liff.line.me/{LIFF_ID}?shift={shift}')))
         else:
             items.append(QuickReplyItem(action=MessageAction(label=label[:20], text=label)))
     return TextMessage(text=text, quick_reply=QuickReply(items=items[:13]))
