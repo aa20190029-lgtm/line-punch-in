@@ -669,8 +669,8 @@ def handle_location(line_user_id, lat, lng):
     return None
 
 
-def punch_with_location(line_user_id, shift_num, lat, lng):
-    """LIFF 網頁打卡：直接用手機 GPS 座標完成打卡（員工不需手動分享位置）。
+def punch_with_location(line_user_id, shift_num, lat=None, lng=None):
+    """LIFF 網頁打卡：開啟即完成打卡（已改為免分享定位）。
     回傳純文字訊息給網頁顯示。成功訊息以 ✅ 開頭。"""
     emp = get_employee_by_line_id(line_user_id)
     if not emp:
@@ -687,8 +687,8 @@ def punch_with_location(line_user_id, shift_num, lat, lng):
         return (f'⚠️ {shift["name"]}今天上下班都打過了\n'
                 f'上班：{record["punch_in"]}　下班：{record["punch_out"]}')
 
-    # GPS 範圍檢查（GPS 開啟時才檢查）
-    if get_config('gps_enabled') == '1':
+    # GPS 範圍檢查（已改為免分享定位：沒有座標就完全跳過檢查）
+    if lat is not None and lng is not None and get_config('gps_enabled') == '1':
         store_lat_str = get_config('store_lat') or ''
         store_lng_str = get_config('store_lng') or ''
         if not store_lat_str or not store_lng_str:
@@ -751,6 +751,7 @@ def _do_punch_in(line_user_id, shift_num):
 
     msg = (f'✅ {shift["name"]}上班打卡成功\n'
            f'{emp["name"]}\n'
+           f'日期：{today_str()}\n'
            f'時間：{t}　（班表 {shift["start"]}）')
     if late > 0:
         msg += f'\n⚠️ 遲到 {late} 分鐘'
@@ -784,6 +785,7 @@ def _do_punch_out(line_user_id, shift_num):
 
     msg = (f'✅ {shift["name"]}下班打卡成功\n'
            f'{emp["name"]}\n'
+           f'日期：{today}\n'
            f'時間：{t}　工作 {worked:.1f} 小時')
     if ot > 0:
         ot_pay = calc_overtime_pay(hourly_rate, ot)
