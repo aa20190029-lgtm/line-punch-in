@@ -792,12 +792,20 @@ def _do_punch_out(line_user_id, shift_num):
     if ot > 0:
         ot_pay = calc_overtime_pay(hourly_rate, ot)
         msg += f'\n加班 {ot} 分鐘（+{ot_pay} 元）'
-    if early_leave > 0:
-        el_deduct = calc_early_leave_deduction(hourly_rate, early_leave)
-        msg += f'\n早退 {early_leave} 分鐘（-{el_deduct} 元）'
-    if record and record.get('late_minutes', 0) and record['late_minutes'] > 0:
-        late_deduct = calc_late_deduction(hourly_rate, record['late_minutes'])
-        msg += f'\n遲到 {record["late_minutes"]} 分鐘（-{late_deduct} 元）'
+    if salary_type == 'monthly':
+        # 月薪制：薪資固定，遲到/早退按時薪扣回
+        if early_leave > 0:
+            el_deduct = calc_early_leave_deduction(hourly_rate, early_leave)
+            msg += f'\n早退 {early_leave} 分鐘（-{el_deduct} 元）'
+        if record and record.get('late_minutes', 0) and record['late_minutes'] > 0:
+            late_deduct = calc_late_deduction(hourly_rate, record['late_minutes'])
+            msg += f'\n遲到 {record["late_minutes"]} 分鐘（-{late_deduct} 元）'
+    else:
+        # PT 時薪：按實際工時計薪，遲到/早退只提示、不另外扣款
+        if early_leave > 0:
+            msg += f'\n提早下班 {early_leave} 分鐘（工時已按實際計算）'
+        if record and record.get('late_minutes', 0) and record['late_minutes'] > 0:
+            msg += f'\n遲到 {record["late_minutes"]} 分鐘（工時已按實際計算）'
     return qr(msg, ['查打卡記錄', '查本月薪資'])
 
 
@@ -870,7 +878,7 @@ def handle_my_month(line_user_id):
         else:
             msg += f'底薪：{s["base_pay"]:,} 元（月薪）\n'
     else:
-        msg += f'底薪：{s["base_pay"]:,} 元（時薪{emp.get("hourly_wage",200)}元×4h）\n'
+        msg += f'底薪：{s["base_pay"]:,} 元（時薪{emp.get("hourly_wage",200)}元 × 實際 {s.get("paid_hours", 0)}h）\n'
     if s['overtime_pay'] > 0:
         msg += f'加班費：+{s["overtime_pay"]:,} 元\n'
     if s.get('holiday_bonus', 0) > 0:
@@ -1007,7 +1015,7 @@ def handle_query_employee(name):
         else:
             msg += f'底薪：{s["base_pay"]:,} 元（月薪{monthly_salary:,}元）\n'
     else:
-        msg += f'底薪：{s["base_pay"]:,} 元\n'
+        msg += f'底薪：{s["base_pay"]:,} 元（實際 {s.get("paid_hours", 0)}h）\n'
     if s['overtime_pay'] > 0:
         msg += f'加班費：+{s["overtime_pay"]:,} 元\n'
     if s.get('holiday_bonus', 0) > 0:

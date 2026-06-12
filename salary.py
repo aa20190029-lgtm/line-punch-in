@@ -96,10 +96,13 @@ def _calc_hourly_salary(employee, records, holiday_bonuses=None):
             unique_dates.add(r['date'])
 
     work_days = len(unique_dates)
-    base_pay = round(hourly_wage * HOURS_PER_SHIFT * work_shifts)
+    # PT（時薪）按「實際工作時間」計薪：排班時數扣掉遲到/早退分鐘＝實際在班時數。
+    # 遲到/早退已直接反映在工時上，不再另外扣款（避免重複扣）。
+    paid_hours = HOURS_PER_SHIFT * work_shifts - total_late / 60 - total_early_leave / 60
+    if paid_hours < 0:
+        paid_hours = 0
+    base_pay = round(hourly_wage * paid_hours)
     ot_pay = calc_overtime_pay(hourly_wage, total_ot)
-    late_deduct = calc_late_deduction(hourly_wage, total_late)
-    early_leave_deduct = calc_early_leave_deduction(hourly_wage, total_early_leave)
     holiday_bonus = sum(b['bonus_amount'] for b in holiday_bonuses)
 
     return {
@@ -109,13 +112,14 @@ def _calc_hourly_salary(employee, records, holiday_bonuses=None):
         'total_late_minutes': total_late,
         'total_overtime_minutes': total_ot,
         'total_early_leave_minutes': total_early_leave,
+        'paid_hours': round(paid_hours, 1),
         'base_pay': base_pay,
         'overtime_pay': ot_pay,
-        'late_deduction': late_deduct,
-        'early_leave_deduction': early_leave_deduct,
+        'late_deduction': 0,
+        'early_leave_deduction': 0,
         'leave_deduction': 0,
         'holiday_bonus': holiday_bonus,
-        'net_pay': base_pay + ot_pay - late_deduct - early_leave_deduct + holiday_bonus,
+        'net_pay': base_pay + ot_pay + holiday_bonus,
         'hourly_rate': hourly_wage,
         'pay_days': None,
         'total_days': None,
