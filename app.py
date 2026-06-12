@@ -117,8 +117,8 @@ LIFF_HTML = """<!DOCTYPE html>
 <div class="box">
   <div class="shift" id="shift">打卡</div>
   <div id="spinner" class="spinner"></div>
-  <div class="msg" id="msg">打卡中，請稍候…</div>
-  <div class="hint" id="hint">請稍候，馬上完成</div>
+  <div class="msg" id="msg">定位中，請稍候…</div>
+  <div class="hint" id="hint">若跳出「允許定位」請按允許</div>
   <button id="btn" style="display:none" onclick="closeWin()">關閉</button>
 </div>
 <script>
@@ -140,13 +140,24 @@ function show(text, ok, retry){
 }
 function closeWin(){ if(window.liff && liff.closeWindow) liff.closeWindow(); else window.close(); }
 
-function sendPunch(){
+function getPos(){
+  if(!navigator.geolocation){ show("此裝置不支援定位，請改用手機打卡。", false, true); return; }
+  navigator.geolocation.getCurrentPosition(function(pos){
+    sendPunch(pos.coords.latitude, pos.coords.longitude);
+  }, function(err){
+    var t = "無法取得定位。\\n請到手機設定開啟定位權限後再試。";
+    if(err && err.code === 1) t = "你拒絕了定位權限。\\n請允許定位才能打卡。";
+    show(t, false, true);
+  }, { enableHighAccuracy:true, timeout:15000, maximumAge:0 });
+}
+
+function sendPunch(lat, lng){
   document.getElementById("msg").textContent = "打卡中…";
   var idToken = (liff.getIDToken && liff.getIDToken()) || "";
   liff.getProfile().then(function(p){
     return fetch("/api/liff-punch", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ shift: shift, idToken: idToken, userId: p.userId })
+      body: JSON.stringify({ shift: shift, lat: lat, lng: lng, idToken: idToken, userId: p.userId })
     });
   }).then(function(r){ return r.json(); })
     .then(function(d){ show(d.message || "打卡完成", !!d.ok, !d.ok); })
@@ -155,7 +166,7 @@ function sendPunch(){
 
 liff.init({ liffId: LIFF_ID }).then(function(){
   if(!liff.isLoggedIn()){ liff.login(); return; }
-  sendPunch();
+  getPos();
 }).catch(function(){
   show("初始化失敗，請關閉重開。\\n（老闆：請確認 LIFF_ID 設定正確）", false, true);
 });
@@ -195,10 +206,12 @@ def liff_punch():
 
     try:
         shift_num = int(data.get('shift'))
+        lat = float(data.get('lat'))
+        lng = float(data.get('lng'))
     except (TypeError, ValueError):
-        return jsonify({'ok': False, 'message': '班別資料不完整，請重新打卡。'})
+        return jsonify({'ok': False, 'message': '定位資料不完整，請重新打卡。'})
 
-    text = punch_with_location(user_id, shift_num)
+    text = punch_with_location(user_id, shift_num, lat, lng)
     return jsonify({'ok': text.startswith('✅'), 'message': text})
 
 
